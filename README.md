@@ -9,19 +9,6 @@ A microservice system that uses a central service registry for service discovery
 
 ![Architecture](docs/architecture.png)
 
-```
-                  Service Registry (Port 5001)
-                   /                    \
-            register +               register +
-            heartbeat                 heartbeat
-                /                        \
-    Order Service (8001)       Order Service (8002)
-                \                        /
-                 \     random pick      /
-                  \        |           /
-                   Discovery Client
-```
-
 1. The registry starts first and listens on port 5001
 2. Two order service instances start on ports 8001 and 8002, each registers itself with the registry and starts sending heartbeats every 10 seconds
 3. The client calls `GET /discover/order-service` to get all active instances, picks one at random, and sends the request
@@ -77,9 +64,19 @@ python3 client.py --rounds 10
 
 ## Proof of Functionality
 
-### 1. Both Instances Register Successfully
+### 1. Registry Health Check
 
-After starting both order service instances, querying the registry shows 2 active instances:
+```
+$ curl -s http://localhost:5001/health | python3 -m json.tool
+{
+    "status": "healthy",
+    "timestamp": "2026-03-18T19:58:08.323686"
+}
+```
+
+### 2. Both Instances Register Successfully
+
+After starting both order service instances, the registry shows 2 active instances:
 
 ```
 $ curl -s http://localhost:5001/services | python3 -m json.tool
@@ -94,7 +91,16 @@ $ curl -s http://localhost:5001/services | python3 -m json.tool
 }
 ```
 
-### 2. Discovery Returns Both Instances
+Service startup logs:
+```
+[REGISTERED] order-service at http://localhost:8001
+[STARTED] order-service-8001 on http://localhost:8001
+
+[REGISTERED] order-service at http://localhost:8002
+[STARTED] order-service-8002 on http://localhost:8002
+```
+
+### 3. Discovery Returns Both Instances
 
 ```
 $ curl -s http://localhost:5001/discover/order-service | python3 -m json.tool
@@ -103,47 +109,120 @@ $ curl -s http://localhost:5001/discover/order-service | python3 -m json.tool
     "instances": [
         {
             "address": "http://localhost:8001",
-            "uptime_seconds": 3.888687
+            "uptime_seconds": 4.954628
         },
         {
             "address": "http://localhost:8002",
-            "uptime_seconds": 2.912409
+            "uptime_seconds": 2.963674
         }
     ],
     "service": "order-service"
 }
 ```
 
-### 3. Client Randomly Distributes Requests
+### 4. Client Randomly Distributes Requests Across Instances
 
 Running the client for 10 rounds shows requests going to both instances:
 
 ```
 $ python3 client.py --rounds 10
+============================================================
+SERVICE DISCOVERY CLIENT
+============================================================
+Registry: http://localhost:5001
+Action:   list
+Rounds:   10
+============================================================
 
 === Round 1/10 ===
 Discovered 2 instance(s): ['http://localhost:8001', 'http://localhost:8002']
-Selected: http://localhost:8002
-Response from instance: order-service-8002
-
-=== Round 2/10 ===
 Selected: http://localhost:8001
 Response from instance: order-service-8001
+Orders returned: 3
+---
 
-...
+=== Round 2/10 ===
+Discovered 2 instance(s): ['http://localhost:8001', 'http://localhost:8002']
+Selected: http://localhost:8002
+Response from instance: order-service-8002
+Orders returned: 3
+---
+
+=== Round 3/10 ===
+Discovered 2 instance(s): ['http://localhost:8001', 'http://localhost:8002']
+Selected: http://localhost:8002
+Response from instance: order-service-8002
+Orders returned: 3
+---
+
+=== Round 4/10 ===
+Discovered 2 instance(s): ['http://localhost:8001', 'http://localhost:8002']
+Selected: http://localhost:8001
+Response from instance: order-service-8001
+Orders returned: 3
+---
+
+=== Round 5/10 ===
+Discovered 2 instance(s): ['http://localhost:8001', 'http://localhost:8002']
+Selected: http://localhost:8002
+Response from instance: order-service-8002
+Orders returned: 3
+---
+
+=== Round 6/10 ===
+Discovered 2 instance(s): ['http://localhost:8001', 'http://localhost:8002']
+Selected: http://localhost:8002
+Response from instance: order-service-8002
+Orders returned: 3
+---
+
+=== Round 7/10 ===
+Discovered 2 instance(s): ['http://localhost:8001', 'http://localhost:8002']
+Selected: http://localhost:8002
+Response from instance: order-service-8002
+Orders returned: 3
+---
+
+=== Round 8/10 ===
+Discovered 2 instance(s): ['http://localhost:8001', 'http://localhost:8002']
+Selected: http://localhost:8002
+Response from instance: order-service-8002
+Orders returned: 3
+---
+
+=== Round 9/10 ===
+Discovered 2 instance(s): ['http://localhost:8001', 'http://localhost:8002']
+Selected: http://localhost:8002
+Response from instance: order-service-8002
+Orders returned: 3
+---
+
+=== Round 10/10 ===
+Discovered 2 instance(s): ['http://localhost:8001', 'http://localhost:8002']
+Selected: http://localhost:8002
+Response from instance: order-service-8002
+Orders returned: 3
+---
 
 ============================================================
 DISTRIBUTION SUMMARY
 ============================================================
-  order-service-8001: 4/10 requests (40%)
-  order-service-8002: 6/10 requests (60%)
+  order-service-8001: 2/10 requests (20%)
+  order-service-8002: 8/10 requests (80%)
 ```
 
-Both instances receive traffic, confirming random load distribution works.
+Both instances received traffic, confirming random load distribution works.
 
-### 4. Graceful Shutdown
+### 5. Graceful Shutdown
 
-When an instance is stopped (Ctrl+C or SIGTERM), it deregisters from the registry. After stopping instance 2:
+When instance 2 is stopped, it deregisters from the registry. The registry immediately reflects the change:
+
+```
+[SHUTDOWN] Gracefully stopping order-service-8002...
+[DEREGISTERED] order-service at http://localhost:8002
+```
+
+After shutdown, only instance 1 remains:
 
 ```
 $ curl -s http://localhost:5001/discover/order-service | python3 -m json.tool
@@ -152,32 +231,53 @@ $ curl -s http://localhost:5001/discover/order-service | python3 -m json.tool
     "instances": [
         {
             "address": "http://localhost:8001",
-            "uptime_seconds": 45.2
+            "uptime_seconds": 7.165257
         }
     ],
     "service": "order-service"
 }
 ```
 
-Only instance 1 remains.
-
 ## Tests
 
+### Unit Tests (Order Service)
+
 ```bash
-source venv/bin/activate
-pytest tests/test_order_service.py -v
+$ pytest tests/test_order_service.py -v
+
+tests/test_order_service.py::test_get_orders PASSED                      [ 16%]
+tests/test_order_service.py::test_get_order_by_id PASSED                 [ 33%]
+tests/test_order_service.py::test_get_order_not_found PASSED             [ 50%]
+tests/test_order_service.py::test_create_order PASSED                    [ 66%]
+tests/test_order_service.py::test_create_order_missing_fields PASSED     [ 83%]
+tests/test_order_service.py::test_health PASSED                          [100%]
+
+6 passed in 0.15s
 ```
 
-Output:
-```
-tests/test_order_service.py::test_get_orders PASSED
-tests/test_order_service.py::test_get_order_by_id PASSED
-tests/test_order_service.py::test_get_order_not_found PASSED
-tests/test_order_service.py::test_create_order PASSED
-tests/test_order_service.py::test_create_order_missing_fields PASSED
-tests/test_order_service.py::test_health PASSED
+### Integration Tests (Full System)
 
-6 passed
+These tests spin up the registry and both service instances as subprocesses and verify the entire discovery flow end-to-end:
+
+```bash
+$ pytest tests/test_integration.py -v
+
+tests/test_integration.py::test_registry_health PASSED                   [ 16%]
+tests/test_integration.py::test_service_registration PASSED              [ 33%]
+tests/test_integration.py::test_service_discovery PASSED                 [ 50%]
+tests/test_integration.py::test_client_random_routing PASSED             [ 66%]
+tests/test_integration.py::test_individual_instance_responds PASSED      [ 83%]
+tests/test_integration.py::test_z_graceful_deregistration PASSED         [100%]
+
+6 passed in 4.30s
+```
+
+### All Tests
+
+```bash
+$ pytest tests/ -v
+
+12 passed
 ```
 
 ## Files
@@ -188,5 +288,5 @@ tests/test_order_service.py::test_health PASSED
 | `order_service.py` | Order microservice with auto-registration |
 | `client.py` | Discovery client with random instance selection |
 | `week-7-demo.sh` | One-click demo script |
-| `tests/` | Unit tests for the order service |
+| `tests/` | Unit and integration tests |
 | `docs/architecture.png` | Architecture diagram |
